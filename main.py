@@ -1,143 +1,136 @@
-import requests
-import time
+import os
 import subprocess
 import uuid
-import shutil
-from pathlib import Path
-import logging
-import yt_dlp  # Для скачивания видео
-from dotenv import load_dotenv
-import os
-import git  # Для работы с GitHub
+import re
+import json
 
-# Загрузка переменных окружения
-load_dotenv()
+def download_video(video_url, output_folder):
+    """Скачивает видео по ссылке и возвращает его путь."""
+    os.makedirs(output_folder, exist_ok=True)
+    video_id = str(uuid.uuid4())  
+    video_path = f"{output_folder}/{video_id}/downloaded_video.mp4"
+    os.makedirs(os.path.dirname(video_path), exist_ok=True)
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# OpenAI API Key
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise ValueError("\u274c Ошибка: API-ключ OpenAI не найден! Проверьте .env файл.")
-
-# GitHub данные
-GITHUB_REPO = "https://github.com/juliakriv0137/video-frames.git"
-GITHUB_LOCAL_PATH = Path("video-frames")
-GITHUB_USERNAME = os.getenv("GITHUB_USERNAME")
-GITHUB_ACCESS_TOKEN = os.getenv("GITHUB_ACCESS_TOKEN")
-
-
-def download_video(url: str, output_dir: Path) -> Path:
-    """Скачивает видео с Instagram через yt-dlp."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    video_path = output_dir / "downloaded_video.mp4"
-
-    ydl_opts = {
-        "outtmpl": str(video_path),
-        "format": "best",
-        "quiet": False,
-    }
+    command = [
+        "yt-dlp",
+        "-o", video_path,
+        "-f", "mp4",
+        video_url
+    ]
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        return video_path
-    except Exception as e:
-        logger.error(f"Ошибка при скачивании видео: {e}")
-        raise
-
-
-def extract_frames(video_path: Path, frames_dir: Path, fps: float):
-    """Извлекает кадры из видео."""
-    try:
-        frames_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run([
-            "ffmpeg", "-i", str(video_path), "-vf", f"fps=1/{fps}", f"{frames_dir}/frame_%04d.png"
-        ], check=True)
-        video_path.unlink()
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        print(f"✅ Видео скачано: {video_path}")
+        return video_id, video_path
     except subprocess.CalledProcessError as e:
-        logger.error(f"Ошибка при извлечении кадров: {e}")
-        raise
+        print(f"❌ Ошибка при скачивании видео:\n{e.stderr}")
+        return None, None
 
+def extract_frames(video_path, output_folder, frame_rate):
+    """Извлекает кадры из видео и возвращает их количество."""
+    if not os.path.exists(video_path):
+        print("❌ Ошибка: Видео не найдено!")
+        return 0
 
-def upload_frames_to_github(frames_dir: Path):
-    """Загружает кадры на GitHub."""
-    if not GITHUB_LOCAL_PATH.exists():
-        git.Repo.clone_from(GITHUB_REPO, GITHUB_LOCAL_PATH)
-    
-    repo = git.Repo(GITHUB_LOCAL_PATH)
-    
-    # Копируем кадры в локальный репозиторий
-    destination = GITHUB_LOCAL_PATH / frames_dir.name
-    shutil.copytree(frames_dir, destination, dirs_exist_ok=True)
+    os.makedirs(output_folder, exist_ok=True)
 
-    repo.git.add(A=True)
-    repo.index.commit(f"Добавлены кадры {frames_dir.name}")
-    origin = repo.remote(name='origin')
-    origin.push()
+    command = [
+        "ffmpeg",
+        "-i", video_path,
+        "-vf", f"fps=1/{frame_rate}",
+        f"{output_folder}/frame_%04d.png"
+    ]
 
-    return f"https://github.com/juliakriv0137/video-frames/tree/main/{frames_dir.name}"
-
-
-def analyze_image(image_url: str) -> str:
-    """Анализирует изображение с помощью OpenAI API."""
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    
-    payload = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {"role": "system", "content": "Детально опиши, что происходит на изображении."},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": image_url}}
-            ]}
-        ],
-        "max_tokens": 300
-    }
-    
     try:
-        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
-    except requests.RequestException as e:
-        logger.error(f"Ошибка при анализе изображения: {e}")
-        return "Ошибка анализа изображения."
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
 
+        # Подсчёт количества кадров
+        frame_files = sorted(
+            [f for f in os.listdir(output_folder) if re.match(r'frame_\d+\.png', f)]
+        )
+        frame_count = len(frame_files)
 
-def analyze_video(url: str, fps: float):
-    """Обрабатывает видео, загружает кадры в GitHub и передает их GPT."""
-    task_id = str(uuid.uuid4())
-    frames_dir = Path("frames") / task_id
-    
-    try:
-        video_path = download_video(url, Path("videos") / task_id)
-        extract_frames(video_path, frames_dir, fps)
-        github_link = upload_frames_to_github(frames_dir)
+        if frame_count == 0:
+            print("⚠️ Кадры не были извлечены!")
+            return 0
 
-        summary_payload = {
-            "model": "gpt-4o",
-            "messages": [
-                {"role": "system", "content": "Проанализируй кадры и составь описание видео."},
-                {"role": "user", "content": f"Вот ссылка на кадры: {github_link}"
-                }
-            ],
-            "max_tokens": 1200
-        }
+        print(f"📸 Извлечено {frame_count} кадров")
+        return frame_count
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Ошибка при извлечении кадров:\n{e.stderr}")
+        return 0
 
-        response = requests.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}, json=summary_payload)
-        response.raise_for_status()
-        video_summary = response.json()["choices"][0]["message"]["content"]
+def generate_github_links(folder_name, frame_count):
+    """Создаёт ссылки на каждый кадр в GitHub."""
+    base_url = "https://github.com/juliakriv0137/video-frames/blob/main"
+
+    frame_links = [
+        f"{base_url}/{folder_name}/frame_{i:04d}.png?raw=true"
+        for i in range(1, frame_count + 1)
+    ]
+
+    return frame_links
+
+def get_validated_input(prompt, expected_type):
+    """Функция для безопасного ввода данных."""
+    while True:
+        user_input = input(prompt).strip()
         
-        return {"summary": video_summary, "frames_url": github_link}
-    except Exception as e:
-        logger.error(f"Ошибка в процессе анализа видео: {e}")
-        return {"error": str(e)}
+        if expected_type == "url":
+            if user_input.startswith("http"):
+                return user_input
+            else:
+                print("❌ Ошибка: Введите корректную ссылку на видео!")
 
+        elif expected_type == "int":
+            try:
+                value = int(user_input)
+                if value > 0:
+                    return value
+                else:
+                    print("❌ Ошибка: Введите положительное число!")
+            except ValueError:
+                print("❌ Ошибка: Введите корректное число!")
+
+def main():
+    # Получаем корректные данные
+    video_url = get_validated_input("Введите ссылку на пост Instagram или YouTube: ", "url")
+    frame_rate = get_validated_input("Введите частоту кадров (в секундах): ", "int")
+
+    output_folder = "videos"
+    frame_folder = "frames"
+
+    # 1. Скачиваем видео
+    video_id, video_path = download_video(video_url, output_folder)
+    if not video_id:
+        print("❌ Не удалось скачать видео.")
+        return
+
+    # 2. Извлекаем кадры
+    frame_output_folder = f"{frame_folder}/{video_id}"
+    frame_count = extract_frames(video_path, frame_output_folder, frame_rate)
+
+    if frame_count == 0:
+        print("❌ Не удалось извлечь кадры.")
+        return
+
+    # 3. Генерируем ссылки на кадры
+    frame_links = generate_github_links(video_id, frame_count)
+
+    # 4. Вывод ссылок для проверки
+    print("\n🔗 Ссылки на кадры (первые 5):")
+    for link in frame_links[:5]:  # Покажем первые 5 ссылок для проверки
+        print(link)
+
+    input("\n✅ Проверь ссылки выше. Если всё верно, нажми Enter для отправки GPT...")
+
+    # 5. Отправляем GPT только после подтверждения
+    result = {
+        "summary": f"✅ Видео обработано. Извлечено {frame_count} кадров.",
+        "frames_urls": frame_links
+    }
+
+    print(json.dumps(result, indent=4, ensure_ascii=False))  # ensure_ascii=False для корректного отображения
 
 if __name__ == "__main__":
-    video_url = input("Введите ссылку на пост Instagram или YouTube: ")
-    fps = float(input("Введите частоту кадров (в секундах): "))
-    result = analyze_video(video_url, fps)
-    print("\nРезультаты анализа:")
-    print(result)
+    main()
