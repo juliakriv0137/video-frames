@@ -26,7 +26,7 @@ if not OPENAI_API_KEY:
 
 # GitHub данные
 GITHUB_REPO = "https://github.com/juliakriv0137/video-frames.git"
-GITHUB_LOCAL_PATH = Path("video-frames") / "frames"  # Путь к локальной папке frames
+GITHUB_LOCAL_PATH = Path("video-frames") / "frames"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/juliakriv0137/video-frames/refs/heads/main/frames/"
 
 def check_dependencies():
