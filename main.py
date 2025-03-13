@@ -26,8 +26,8 @@ if not OPENAI_API_KEY:
 
 # GitHub данные
 GITHUB_REPO = "https://github.com/juliakriv0137/video-frames.git"
-GITHUB_LOCAL_PATH = Path("video-frames")
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/juliakriv0137/video-frames/main/video-frames/frames/"
+GITHUB_LOCAL_PATH = Path("video-frames") / "frames"  # Путь к локальной папке frames
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/juliakriv0137/video-frames/refs/heads/main/frames/"
 
 def check_dependencies():
     """Проверяет, установлены ли yt-dlp, ffmpeg и Tesseract OCR"""
@@ -92,10 +92,14 @@ def upload_frames_to_github(frames_dir: Path):
     repo = git.Repo(GITHUB_LOCAL_PATH)
 
     # Создаем структуру директорий
-    destination = GITHUB_LOCAL_PATH / "video-frames" / "frames" / frames_dir.name
+    destination = GITHUB_LOCAL_PATH / frames_dir.name
     shutil.copytree(frames_dir, destination, dirs_exist_ok=True)
 
-    repo.git.add(A=True)
+    # Проверка состояния репозитория перед добавлением
+    print("Git status before commit:")
+    print(repo.git.status())
+
+    repo.git.add("--all")  # Добавляем все файлы
     repo.index.commit(f"Добавлены кадры {frames_dir.name}")
     
     try:
@@ -191,5 +195,3 @@ if __name__ == "__main__":
         print(f"🖼 Количество кадров: {result['frame_count']}")
         print(f"📜 Описание видео: {result['summary']}")
         print(f"📝 Текст с видео: {result['text']}")
-
-
